@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>DD Manager — Task Board</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ══════════════════════════════════════════
+     CHECK-IN SCREEN
+══════════════════════════════════════════ -->
+<div id="checkin-screen" class="screen">
+  <div class="checkin-card">
+    <div class="checkin-shift-badge" id="checkin-shift-label">Select Shift</div>
+    <div class="checkin-title">Morning or Night?</div>
+    <div class="checkin-sub" id="checkin-time-range">Choose the shift you're starting.</div>
+    <div class="manager-list" id="manager-list"></div>
+    <button class="checkin-confirm" id="checkin-confirm-btn" onclick="confirmCheckin()">Start Shift →</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MAIN APP SCREEN
+══════════════════════════════════════════ -->
+<div id="main-screen" class="screen">
+  <div class="app-header">
+    <div class="header-top">
+      <div>
+        <div class="header-logo">DD Manager</div>
+      </div>
+      <div class="header-right">
+        <div class="header-time" id="live-clock">--:-- --</div>
+        <div class="manager-chip" id="header-manager">—</div>
+        <button class="settings-btn" onclick="showAdmin()">⚙</button>
+      </div>
+    </div>
+    <div class="shift-tabs">
+      <button class="shift-tab active" id="tab-morning" onclick="switchShift('morning')">Morning</button>
+      <button class="shift-tab inactive" id="tab-night" onclick="switchShift('night')">Night</button>
+    </div>
+  </div>
+
+  <div class="app-body" id="app-body">
+    <!-- Dynamic content -->
+  </div>
+
+  <div class="warning-banner hidden" id="completion-warning"></div>
+  <div class="bottom-bar">
+    <button class="btn-complete" id="complete-btn" onclick="markShiftComplete()">Mark Shift Complete</button>
+    <span class="signature-note hidden" id="signature-note"></span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     ADMIN SCREEN
+══════════════════════════════════════════ -->
+<div id="admin-screen" class="screen">
+  <div class="admin-header">
+    <button class="admin-back" onclick="showMain()">←</button>
+    <div class="admin-title">Settings & Logs</div>
+  </div>
+  <div class="admin-body" id="admin-body"></div>
+</div>
+
+<!-- ══════════════════════════════════════════
+     MODALS
+══════════════════════════════════════════ -->
+<div class="modal-overlay hidden" id="complete-modal">
+  <div class="modal">
+    <div class="modal-title">✅ Shift Complete!</div>
+    <div class="modal-sub" id="complete-modal-sub">Please enter your name to confirm completion of this shift.</div>
+    <input class="modal-input" id="complete-signer-input" placeholder="Enter your name">
+    <div class="modal-btns">
+      <button class="modal-confirm" onclick="submitCompletionSignature()">Sign & Capture</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<script src="script.js"></script>
+</body>
+</html>

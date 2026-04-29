@@ -1,0 +1,600 @@
+// ══════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════
+let state = {
+  config: null,
+  managers: [],
+  currentManager: null,
+  currentShift: 'morning',
+  tasks: { morning: [], night: [] },
+  completions: [],
+  shiftLogs: [],
+  completionSigner: null
+};
+let lastMidnightReset = null;
+let logFilterDate = null;
+
+const DEFAULT_TASKS = {
+  morning: [
+    { id: 'm1', name: 'Clean all stations', section: 'Cleaning' },
+    { id: 'm2', name: 'Mop floors', section: 'Cleaning' },
+    { id: 'm3', name: 'Wash dishes', section: 'Cleaning' },
+    { id: 'm4', name: 'Side prep', section: 'Food Prep' },
+    { id: 'm5', name: 'Fill up all stations', section: 'Food Prep' },
+    { id: 'm6', name: 'Change trash bag', section: 'Cleaning' },
+    { id: 'm7', name: 'Complete red book', section: 'Manager' },
+  ],
+  night: [
+    { id: 'n1', name: 'Clean all stations', section: 'Cleaning' },
+    { id: 'n2', name: 'Mop floors', section: 'Cleaning' },
+    { id: 'n3', name: 'Wash dishes & sanitize', section: 'Cleaning' },
+    { id: 'n4', name: 'Restock for morning', section: 'Stocking' },
+    { id: 'n5', name: 'Take out trash', section: 'Closing' },
+    { id: 'n6', name: 'Check equipment & log issues', section: 'Closing' },
+    { id: 'n7', name: 'Complete red book from WorkPulse', section: 'Manager' },
+  ]
+};
+
+const DEFAULT_CONFIG = {};
+
+// ── PERSIST ──
+function save() { localStorage.setItem('dd_state', JSON.stringify(state)); }
+function load() {
+  const raw = localStorage.getItem('dd_state');
+  if (raw) { try { state = { ...state, ...JSON.parse(raw) }; } catch(e) {} }
+}
+
+function ensureDefaults() {
+  if (!state.config) {
+    state.config = { ...DEFAULT_CONFIG };
+  }
+  if (!state.tasks.morning.length) state.tasks.morning = [...DEFAULT_TASKS.morning];
+  if (!state.tasks.night.length) state.tasks.night = [...DEFAULT_TASKS.night];
+  if (!state.managers.length) state.managers = [
+    { id: 'mgr1', name: 'Manager 1', role: 'Manager' }
+  ];
+  mergeMissingDefaultTasks();
+}
+
+function mergeMissingDefaultTasks() {
+  DEFAULT_TASKS.morning.forEach(t => {
+    if (!state.tasks.morning.find(existing => existing.id === t.id)) {
+      state.tasks.morning.push(t);
+    }
+  });
+  DEFAULT_TASKS.night.forEach(t => {
+    if (!state.tasks.night.find(existing => existing.id === t.id)) {
+      state.tasks.night.push(t);
+    }
+  });
+}
+
+// ── TIME HELPERS ──
+function fmt12(h, m) {
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const h12 = h % 12 || 12;
+  return `${h12}:${String(m).padStart(2,'0')} ${ampm}`;
+}
+function timeToMins(t) {
+  const [h,m] = t.split(':').map(Number);
+  return h * 60 + m;
+}
+function nowMins() {
+  const n = new Date();
+  return n.getHours() * 60 + n.getMinutes();
+}
+function fmtTimeNow() {
+  const n = new Date();
+  return fmt12(n.getHours(), n.getMinutes());
+}
+
+// ── CLOCK ──
+function startClock() {
+  const el = document.getElementById('live-clock');
+  if (!el) return;
+  el.textContent = fmtTimeNow();
+  setInterval(() => { if (el) el.textContent = fmtTimeNow(); }, 10000);
+}
+
+// ══════════════════════════════════════════
+// ROUTING
+// ══════════════════════════════════════════
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function init() {
+  load();
+  ensureDefaults();
+  scheduleMidnightReset();
+  logFilterDate = new Date().toISOString().slice(0,10);
+  goCheckin();
+}
+
+function goCheckin() {
+  state.currentManager = null;
+  state.completionSigner = null;
+  selectedShift = null;
+  detectShift();
+  renderCheckin();
+  showScreen('checkin-screen');
+}
+
+function showMain() { showScreen('main-screen'); renderMain(); }
+function showAdmin() { showScreen('admin-screen'); renderAdmin(); }
+
+// ══════════════════════════════════════════
+// SHIFT DETECTION
+// ══════════════════════════════════════════
+function detectShift() {
+  // No automatic shift detection by time; shift is selected manually.
+}
+
+// ══════════════════════════════════════════
+// CHECK-IN
+// ══════════════════════════════════════════
+let selectedShift = null;
+
+function renderCheckin() {
+  if (!state.config) return;
+  const cfg = state.config;
+  const shift = selectedShift || state.currentShift;
+  document.getElementById('checkin-shift-label').textContent = shift === 'morning' ? 'Morning Shift' : 'Night Shift';
+  document.getElementById('checkin-time-range').textContent = 'Select the shift you are starting.';
+
+  const list = document.getElementById('manager-list');
+  list.innerHTML = ['morning', 'night'].map(shiftOption => {
+    const activeClass = shift === shiftOption ? 'selected' : '';
+    return `
+      <button class="manager-btn ${activeClass}" id="shift-${shiftOption}" onclick="selectShift('${shiftOption}')">
+        <div class="manager-avatar">${shiftOption === 'morning' ? 'M' : 'N'}</div>
+        <div>
+          <div class="manager-name-text">${shiftOption === 'morning' ? 'Morning Shift' : 'Night Shift'}</div>
+        </div>
+      </button>
+    `;
+  }).join('');
+
+  document.getElementById('checkin-confirm-btn').classList.toggle('ready', !!selectedShift);
+}
+
+function selectShift(shift) {
+  selectedShift = shift;
+  document.querySelectorAll('.manager-btn').forEach(b => b.classList.remove('selected'));
+  const btn = document.getElementById('shift-' + shift);
+  if (btn) btn.classList.add('selected');
+  document.getElementById('checkin-confirm-btn').classList.add('ready');
+  renderCheckin();
+}
+
+function confirmCheckin() {
+  const shift = selectedShift || state.currentShift;
+  state.currentShift = shift;
+  state.currentManager = state.currentManager || state.managers[0] || null;
+  save();
+  showMain();
+  startClock();
+  scheduleReminders();
+}
+
+// ══════════════════════════════════════════
+// MAIN RENDER
+// ══════════════════════════════════════════
+function renderMain() {
+  if (!state.config || !state.currentManager) return;
+  const cfg = state.config;
+  document.getElementById('header-manager').textContent = state.currentManager.name;
+
+  const shift = state.currentShift;
+  document.getElementById('tab-morning').className = `shift-tab ${shift==='morning'?'active':'inactive'}`;
+  document.getElementById('tab-night').className   = `shift-tab ${shift==='night'?'active':'inactive'}`;
+
+  const tasks = state.tasks[shift] || [];
+  const today = new Date().toDateString();
+  const doneIds = new Set(
+    state.completions
+      .filter(c => c.shift === shift && c.date === today)
+      .map(c => c.taskId)
+  );
+  const total = tasks.length;
+  const done  = [...doneIds].filter(id => tasks.find(t=>t.id===id)).length;
+  const pct   = total ? Math.round((done/total)*100) : 0;
+  const circumference = 2 * Math.PI * 22;
+  const dash = circumference * (1 - pct/100);
+
+  const sections = {};
+  tasks.forEach(t => {
+    if (!sections[t.section]) sections[t.section] = [];
+    sections[t.section].push(t);
+  });
+
+  // Shift timing is not displayed; users select the shift manually.
+
+  let html = `
+    <div class="progress-banner">
+      <div class="prog-ring">
+        <svg width="56" height="56" viewBox="0 0 56 56">
+          <circle cx="28" cy="28" r="22" fill="none" stroke="#F0ECE8" stroke-width="5"/>
+          <circle cx="28" cy="28" r="22" fill="none" stroke="#FF6B00" stroke-width="5"
+            stroke-dasharray="${circumference}" stroke-dashoffset="${dash}"
+            stroke-linecap="round"/>
+        </svg>
+        <div class="prog-ring-label">${pct}%</div>
+      </div>
+      <div class="prog-info">
+        <div class="prog-title">${shift==='morning'?'Morning':'Night'} checklist</div>
+        <div class="prog-sub">${done} of ${total} tasks complete</div>
+      </div>
+      <div class="prog-manager">
+        <div class="prog-manager-name">${state.currentManager.name}</div>
+        <div class="prog-manager-time">Checked in ${fmtTimeNow()}</div>
+      </div>
+    </div>
+  `;
+
+
+
+  Object.entries(sections).forEach(([section, stasks]) => {
+    html += `<div class="section-label">${section}</div><div class="task-list">`;
+    stasks.forEach(t => {
+      const isDone = doneIds.has(t.id);
+      const comp = state.completions.find(c => c.taskId===t.id && c.shift===shift && c.date===today);
+      html += `
+        <div class="task-item ${isDone?'completed':''}" onclick="toggleTask('${t.id}')">
+          <div class="task-check"><span class="checkmark">✓</span></div>
+          <div class="task-content">
+            <div class="task-name">${t.name}</div>
+            ${isDone ? `<div class="task-meta">Done by ${comp.manager} at ${comp.time}</div>` : ''}
+          </div>
+          ${isDone ? `<div class="task-time-badge">${comp.time}</div>` : ''}
+        </div>`;
+    });
+    html += `</div>`;
+  });
+
+  document.getElementById('app-body').innerHTML = html;
+
+  const allDone = done === total && total > 0;
+  const completeBtn = document.getElementById('complete-btn');
+  completeBtn.textContent = allDone ? '✅ All Done!' : 'Mark Shift Complete';
+  completeBtn.className = `btn-complete ${allDone ? 'done' : ''}`;
+
+  const signatureEl = document.getElementById('signature-note');
+  if (signatureEl) {
+    if (state.completionSigner) {
+      signatureEl.textContent = `Signed by ${state.completionSigner}`;
+      signatureEl.classList.remove('hidden');
+    } else {
+      signatureEl.textContent = '';
+      signatureEl.classList.add('hidden');
+    }
+  }
+}
+
+function switchShift(shift) {
+  state.currentShift = shift;
+  save();
+  renderMain();
+}
+
+function toggleTask(taskId) {
+  const today = new Date().toDateString();
+  const shift = state.currentShift;
+  const tasks = state.tasks[shift] || [];
+  const prevDone = state.completions.filter(c => c.shift === shift && c.date === today).length;
+  const existing = state.completions.findIndex(c => c.taskId===taskId && c.shift===shift && c.date===today);
+  if (existing >= 0) {
+    state.completions.splice(existing, 1);
+  } else {
+    state.completions.push({
+      taskId,
+      shift,
+      date: today,
+      manager: state.currentManager.name,
+      time: fmtTimeNow(),
+      timestamp: Date.now()
+    });
+  }
+  save();
+  renderMain();
+  const newDone = state.completions.filter(c => c.shift === shift && c.date === today).length;
+  if (newDone === tasks.length && prevDone !== tasks.length) {
+    showCompletionSignatureModal();
+  }
+}
+
+function showCompletionSignatureModal() {
+  const warning = document.getElementById('completion-warning');
+  if (warning) {
+    warning.classList.remove('visible');
+    warning.textContent = '';
+  }
+  document.getElementById('complete-modal-sub').textContent = 'All tasks are complete. Please sign off before the screenshot is taken.';
+  document.getElementById('complete-signer-input').value = '';
+  document.getElementById('complete-modal').classList.remove('hidden');
+}
+
+function setCompletionWarning(message) {
+  const warning = document.getElementById('completion-warning');
+  if (!warning) return;
+  warning.textContent = message;
+  warning.classList.add('visible');
+}
+
+function hideCompletionWarning() {
+  const warning = document.getElementById('completion-warning');
+  if (!warning) return;
+  warning.classList.remove('visible');
+  warning.textContent = '';
+}
+
+function submitCompletionSignature() {
+  const nameInput = document.getElementById('complete-signer-input');
+  const signer = nameInput.value.trim();
+  if (!signer) {
+    alert('Please enter your name to sign off.');
+    return;
+  }
+  state.completionSigner = signer;
+  save();
+  closeModal('complete-modal');
+  renderMain();
+  const shift = state.currentShift;
+  const filename = `${shift}-complete-${signer.replace(/\s+/g, '_')}-${Date.now()}.jpg`;
+  captureScreenshot(filename).then(dataUrl => {
+    if (dataUrl) {
+      const now = new Date();
+      state.shiftLogs.push({
+        id: `log_${Date.now()}`,
+        date: now.toDateString(),
+        dateIso: now.toISOString().slice(0,10),
+        shift,
+        signer,
+        time: fmtTimeNow(),
+        timestamp: Date.now(),
+        completed: state.tasks[shift]?.length || 0,
+        total: state.tasks[shift]?.length || 0,
+        screenshot: dataUrl,
+        filename
+      });
+      save();
+    }
+    downloadScreenshot(dataUrl, filename);
+    goCheckin();
+  });
+}
+
+function captureScreenshot(filename) {
+  const target = document.body;
+  if (!target || typeof html2canvas !== 'function') return Promise.resolve(null);
+  return html2canvas(target, {backgroundColor: null}).then(canvas => {
+    return canvas.toDataURL('image/jpeg', 0.65);
+  });
+}
+
+function downloadScreenshot(dataUrl, filename) {
+  if (!dataUrl) return;
+  const link = document.createElement('a');
+  link.href = dataUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function markShiftComplete() {
+  const today = new Date().toDateString();
+  const shift = state.currentShift;
+  const tasks = state.tasks[shift] || [];
+  const done = state.completions.filter(c => c.shift===shift && c.date===today).length;
+  if (tasks.length === 0) {
+    setCompletionWarning('No tasks are available for this shift yet.');
+    return;
+  }
+  if (done === tasks.length) {
+    hideCompletionWarning();
+    showCompletionSignatureModal();
+  } else {
+    setCompletionWarning(`Please finish all tasks before signing off. ${done} of ${tasks.length} completed.`);
+  }
+}
+
+// ══════════════════════════════════════════
+// ADMIN
+// ══════════════════════════════════════════
+function setLogFilterDate(value) {
+  logFilterDate = value;
+  renderAdmin();
+}
+
+function renderAdmin() {
+  const cfg = state.config || {};
+  const now = new Date();
+  const selectedDate = logFilterDate || now.toISOString().slice(0,10);
+  const filteredLogs = state.shiftLogs
+    .filter(l => {
+      const entryDateIso = l.dateIso || new Date(l.date).toISOString().slice(0,10);
+      return entryDateIso === selectedDate;
+    })
+    .sort((a,b) => b.timestamp - a.timestamp);
+
+  function renderLogSection(logs) {
+    if (!logs.length) {
+      return `
+        <div class="admin-row"><div class="admin-row-label" style="color: var(--text3);">No logs for this date.</div></div>
+      `;
+    }
+    return logs.map(log => `
+      <div class="log-entry">
+        <div class="log-entry-top">
+          <div class="log-entry-title">${log.shift.charAt(0).toUpperCase() + log.shift.slice(1)} shift</div>
+          <div class="log-entry-time">${log.time}</div>
+        </div>
+        <div class="log-entry-meta">${log.signer} · ${log.completed}/${log.total} tasks · ${log.date}</div>
+        ${log.screenshot ? `<img class="log-screenshot-thumb" src="${log.screenshot}" alt="Shift screenshot">` : ''}
+      </div>
+    `).join('');
+  }
+
+  let html = `
+    <div class="admin-section">
+      <div class="admin-section-header">Shift Settings</div>
+      <div class="admin-row">
+        <div><div class="admin-row-label">Morning shift</div><div class="admin-row-sub">Manual selection only</div></div>
+      </div>
+      <div class="admin-row">
+        <div><div class="admin-row-label">Night shift</div><div class="admin-row-sub">Manual selection only</div></div>
+      </div>
+      <div class="admin-row">
+        <button onclick="resetSetup()" style="color: var(--danger); background: none; border: none; font-family: inherit; font-size: 14px; cursor: pointer; padding: 0;">Reset tablet setup</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <div class="admin-section-header">Managers</div>
+      ${state.managers.map(m => `
+        <div class="admin-row">
+          <div class="admin-row-label">${m.name}</div>
+          <div class="admin-row-sub">${m.role}</div>
+        </div>
+      `).join('')}
+    </div>
+
+    <div class="admin-section">
+      <div class="admin-section-header">Morning Tasks <button class="add-btn" onclick="showAddTaskForm('morning')">+ Add</button></div>
+      ${state.tasks.morning.map(t => `
+        <div class="admin-row">
+          <div><div class="admin-row-label">${t.name}</div><div class="admin-row-sub">${t.section}</div></div>
+          <button class="admin-delete" onclick="deleteTask('morning','${t.id}')">✕</button>
+        </div>
+      `).join('')}
+      <div class="add-form hidden" id="add-form-morning">
+        <input placeholder="Task name" id="new-task-morning" onkeydown="if(event.key==='Enter')addTask('morning')">
+        <button onclick="addTask('morning')">Add</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <div class="admin-section-header">Night Tasks <button class="add-btn" onclick="showAddTaskForm('night')">+ Add</button></div>
+      ${state.tasks.night.map(t => `
+        <div class="admin-row">
+          <div><div class="admin-row-label">${t.name}</div><div class="admin-row-sub">${t.section}</div></div>
+          <button class="admin-delete" onclick="deleteTask('night','${t.id}')">✕</button>
+        </div>
+      `).join('')}
+      <div class="add-form hidden" id="add-form-night">
+        <input placeholder="Task name" id="new-task-night" onkeydown="if(event.key==='Enter')addTask('night')">
+        <button onclick="addTask('night')">Add</button>
+      </div>
+    </div>
+
+    <div class="admin-section">
+      <div class="admin-section-header">Shift Logs</div>
+      <div class="admin-row">
+        <label class="admin-row-label" for="log-date-filter">Filter date</label>
+        <input type="date" id="log-date-filter" class="log-filter-input" value="${selectedDate}" onchange="setLogFilterDate(this.value)">
+      </div>
+      ${renderLogSection(filteredLogs)}
+    </div>
+  `;
+
+  document.getElementById('admin-body').innerHTML = html;
+}
+
+function showAddTaskForm(shift) {
+  const form = document.getElementById(`add-form-${shift}`);
+  if (form) form.classList.remove('hidden');
+}
+
+function addTask(shift) {
+  const input = document.getElementById(`new-task-${shift}`);
+  const name = input.value.trim();
+  if (!name) return;
+  const section = shift === 'morning' ? 'Cleaning' : 'Closing';
+  state.tasks[shift].push({ id: `t_${Date.now()}`, name, section });
+  input.value = '';
+  save();
+  renderAdmin();
+}
+
+function deleteTask(shift, id) {
+  state.tasks[shift] = state.tasks[shift].filter(t => t.id !== id);
+  save();
+  renderAdmin();
+}
+
+function deleteManager(id) {
+  state.managers = state.managers.filter(m => m.id !== id);
+  save();
+  renderAdmin();
+}
+
+
+function resetSetup() {
+  if (confirm('Reset all store data? This cannot be undone.')) {
+    localStorage.removeItem('dd_state');
+    location.reload();
+  }
+}
+
+// ══════════════════════════════════════════
+// REMINDERS / SOUND
+// ══════════════════════════════════════════
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [523, 659, 784].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.25);
+      gain.gain.linearRampToValueAtTime(0.3, ctx.currentTime + i * 0.25 + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.25 + 0.5);
+      osc.start(ctx.currentTime + i * 0.25);
+      osc.stop(ctx.currentTime + i * 0.25 + 0.6);
+    });
+  } catch(e) {}
+}
+
+function resetAtMidnight() {
+  const now = new Date();
+  const today = now.toDateString();
+  if (now.getHours() !== 0 || now.getMinutes() !== 0) return;
+  if (lastMidnightReset === today) return;
+  lastMidnightReset = today;
+
+  localStorage.removeItem('dd_state');
+  state = {
+    config: null,
+    managers: [],
+    currentManager: null,
+    currentShift: 'morning',
+    tasks: { morning: [], night: [] },
+    completions: [],
+  };
+  selectedShift = null;
+  ensureDefaults();
+  goCheckin();
+}
+
+function scheduleMidnightReset() {
+  resetAtMidnight();
+  setInterval(resetAtMidnight, 60000);
+}
+
+function scheduleReminders() {
+  // Timing-based reminders are disabled because shift timing varies by location.
+}
+
+// ══════════════════════════════════════════
+// MODALS
+// ══════════════════════════════════════════
+function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
+
+// ══════════════════════════════════════════
+// BOOT
+// ══════════════════════════════════════════
+init();
