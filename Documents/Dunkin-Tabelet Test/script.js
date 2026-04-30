@@ -13,6 +13,7 @@ let state = {
 };
 let lastMidnightReset = null;
 let logFilterDate = null;
+let justToggledId = null;
 
 const DEFAULT_TASKS = {
   morning: [
@@ -38,35 +39,34 @@ const DEFAULT_TASKS = {
 const DEFAULT_CONFIG = {};
 
 // ── PERSIST ──
-function save() { localStorage.setItem('dd_state', JSON.stringify(state)); }
+// Tasks are always sourced from code (DEFAULT_TASKS), never from localStorage.
+// Only completions, shiftLogs, and managers are persisted.
+function save() {
+  localStorage.setItem('dd_state', JSON.stringify({
+    managers:   state.managers,
+    completions: state.completions,
+    shiftLogs:  state.shiftLogs
+  }));
+}
+
 function load() {
   const raw = localStorage.getItem('dd_state');
-  if (raw) { try { state = { ...state, ...JSON.parse(raw) }; } catch(e) {} }
+  if (raw) {
+    try {
+      const saved = JSON.parse(raw);
+      if (Array.isArray(saved.managers))   state.managers   = saved.managers;
+      if (Array.isArray(saved.completions)) state.completions = saved.completions;
+      if (Array.isArray(saved.shiftLogs))  state.shiftLogs  = saved.shiftLogs;
+    } catch(e) {}
+  }
 }
 
 function ensureDefaults() {
-  if (!state.config) {
-    state.config = { ...DEFAULT_CONFIG };
-  }
-  if (!state.tasks.morning.length) state.tasks.morning = [...DEFAULT_TASKS.morning];
-  if (!state.tasks.night.length) state.tasks.night = [...DEFAULT_TASKS.night];
-  if (!state.managers.length) state.managers = [
-    { id: 'mgr1', name: 'Manager 1', role: 'Manager' }
-  ];
-  mergeMissingDefaultTasks();
-}
-
-function mergeMissingDefaultTasks() {
-  DEFAULT_TASKS.morning.forEach(t => {
-    if (!state.tasks.morning.find(existing => existing.id === t.id)) {
-      state.tasks.morning.push(t);
-    }
-  });
-  DEFAULT_TASKS.night.forEach(t => {
-    if (!state.tasks.night.find(existing => existing.id === t.id)) {
-      state.tasks.night.push(t);
-    }
-  });
+  state.config = {};
+  // Tasks always come from code — never from localStorage
+  state.tasks.morning = DEFAULT_TASKS.morning.map(t => ({ ...t }));
+  state.tasks.night   = DEFAULT_TASKS.night.map(t => ({ ...t }));
+  if (!state.managers.length) state.managers = [{ id: 'mgr1', name: 'Manager', role: 'Manager' }];
 }
 
 // ── TIME HELPERS ──
@@ -104,9 +104,53 @@ function showScreen(id) {
   document.getElementById(id).classList.add('active');
 }
 
+// ══════════════════════════════════════════
+// THEME
+// ══════════════════════════════════════════
+function initTheme() {
+  const saved = localStorage.getItem('dd_theme') || 'light';
+  document.documentElement.setAttribute('data-theme', saved);
+  updateThemeBtns(saved);
+}
+
+function toggleTheme(event) {
+  const current = document.documentElement.getAttribute('data-theme') || 'light';
+  const next = current === 'dark' ? 'light' : 'dark';
+
+  const applyTheme = () => {
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('dd_theme', next);
+    updateThemeBtns(next);
+  };
+
+  if (!document.startViewTransition) { applyTheme(); return; }
+
+  const btn = event?.currentTarget || event?.target;
+  const rect = btn?.getBoundingClientRect();
+  const x = rect ? rect.left + rect.width  / 2 : window.innerWidth  / 2;
+  const y = rect ? rect.top  + rect.height / 2 : window.innerHeight / 2;
+  const r = Math.hypot(Math.max(x, window.innerWidth - x), Math.max(y, window.innerHeight - y));
+
+  const root = document.documentElement;
+  root.style.setProperty('--vt-x', x + 'px');
+  root.style.setProperty('--vt-y', y + 'px');
+  root.style.setProperty('--vt-r', r + 'px');
+
+  document.startViewTransition(applyTheme);
+}
+
+function updateThemeBtns(theme) {
+  const icon = theme === 'dark' ? '☀' : '🌙';
+  ['theme-btn-main', 'theme-btn-admin', 'theme-btn-checkin'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = icon;
+  });
+}
+
 function init() {
   load();
   ensureDefaults();
+  initTheme();
   scheduleMidnightReset();
   logFilterDate = new Date().toISOString().slice(0,10);
   goCheckin();
@@ -138,22 +182,26 @@ let selectedShift = null;
 
 function renderCheckin() {
   if (!state.config) return;
-  const cfg = state.config;
-  const shift = selectedShift || state.currentShift;
-  document.getElementById('checkin-shift-label').textContent = shift === 'morning' ? 'Morning Shift' : 'Night Shift';
-  document.getElementById('checkin-time-range').textContent = 'Select the shift you are starting.';
+  document.getElementById('checkin-shift-label').textContent =
+    selectedShift ? (selectedShift === 'morning' ? 'Morning Shift' : 'Night Shift') : 'Select a Shift';
+
+  const opts = [
+    { id: 'morning', label: 'Morning Shift', icon: '☀️', desc: 'Opening duties & daily prep' },
+    { id: 'night',   label: 'Night Shift',   icon: '🌙', desc: 'Closing duties & restocking' }
+  ];
 
   const list = document.getElementById('manager-list');
-  list.innerHTML = ['morning', 'night'].map(shiftOption => {
-    const activeClass = shift === shiftOption ? 'selected' : '';
+  list.className = 'shift-option-list';
+  list.innerHTML = opts.map(opt => {
+    const sel = selectedShift === opt.id ? 'selected' : '';
     return `
-      <button class="manager-btn ${activeClass}" id="shift-${shiftOption}" onclick="selectShift('${shiftOption}')">
-        <div class="manager-avatar">${shiftOption === 'morning' ? 'M' : 'N'}</div>
-        <div>
-          <div class="manager-name-text">${shiftOption === 'morning' ? 'Morning Shift' : 'Night Shift'}</div>
+      <button class="shift-option-btn ${sel}" id="shift-${opt.id}" onclick="selectShift('${opt.id}')">
+        <div class="shift-icon">${opt.icon}</div>
+        <div class="shift-option-info">
+          <div class="shift-option-name">${opt.label}</div>
+          <div class="shift-option-desc">${opt.desc}</div>
         </div>
-      </button>
-    `;
+      </button>`;
   }).join('');
 
   document.getElementById('checkin-confirm-btn').classList.toggle('ready', !!selectedShift);
@@ -161,17 +209,18 @@ function renderCheckin() {
 
 function selectShift(shift) {
   selectedShift = shift;
-  document.querySelectorAll('.manager-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.shift-option-btn').forEach(b => b.classList.remove('selected'));
   const btn = document.getElementById('shift-' + shift);
   if (btn) btn.classList.add('selected');
+  document.getElementById('checkin-shift-label').textContent = shift === 'morning' ? 'Morning Shift' : 'Night Shift';
   document.getElementById('checkin-confirm-btn').classList.add('ready');
-  renderCheckin();
 }
 
 function confirmCheckin() {
   const shift = selectedShift || state.currentShift;
   state.currentShift = shift;
-  state.currentManager = state.currentManager || state.managers[0] || null;
+  if (!state.managers.length) state.managers = [{ id: 'mgr1', name: 'Manager', role: 'Manager' }];
+  state.currentManager = state.currentManager || state.managers[0];
   save();
   showMain();
   startClock();
@@ -182,9 +231,9 @@ function confirmCheckin() {
 // MAIN RENDER
 // ══════════════════════════════════════════
 function renderMain() {
-  if (!state.config || !state.currentManager) return;
-  const cfg = state.config;
-  document.getElementById('header-manager').textContent = state.currentManager.name;
+  if (!state.config) return;
+  const manager = state.currentManager || state.managers[0] || { name: '—' };
+  document.getElementById('header-manager').textContent = manager.name;
 
   const shift = state.currentShift;
   document.getElementById('tab-morning').className = `shift-tab ${shift==='morning'?'active':'inactive'}`;
@@ -215,7 +264,7 @@ function renderMain() {
     <div class="progress-banner">
       <div class="prog-ring">
         <svg width="56" height="56" viewBox="0 0 56 56">
-          <circle cx="28" cy="28" r="22" fill="none" stroke="#F0ECE8" stroke-width="5"/>
+          <circle cx="28" cy="28" r="22" fill="none" stroke="var(--border)" stroke-width="5"/>
           <circle cx="28" cy="28" r="22" fill="none" stroke="#FF6B00" stroke-width="5"
             stroke-dasharray="${circumference}" stroke-dashoffset="${dash}"
             stroke-linecap="round"/>
@@ -227,7 +276,7 @@ function renderMain() {
         <div class="prog-sub">${done} of ${total} tasks complete</div>
       </div>
       <div class="prog-manager">
-        <div class="prog-manager-name">${state.currentManager.name}</div>
+        <div class="prog-manager-name">${manager.name}</div>
         <div class="prog-manager-time">Checked in ${fmtTimeNow()}</div>
       </div>
     </div>
@@ -239,10 +288,11 @@ function renderMain() {
     html += `<div class="section-label">${section}</div><div class="task-list">`;
     stasks.forEach(t => {
       const isDone = doneIds.has(t.id);
+      const isJustChecked = justToggledId === t.id;
       const comp = state.completions.find(c => c.taskId===t.id && c.shift===shift && c.date===today);
       html += `
-        <div class="task-item ${isDone?'completed':''}" onclick="toggleTask('${t.id}')">
-          <div class="task-check"><span class="checkmark">✓</span></div>
+        <div class="task-item ${isDone?'completed':''}" onclick="toggleTask('${t.id}', event)">
+          <div class="task-check ${isJustChecked?'pop':''}"><span class="checkmark">✓</span></div>
           <div class="task-content">
             <div class="task-name">${t.name}</div>
             ${isDone ? `<div class="task-meta">Done by ${comp.manager} at ${comp.time}</div>` : ''}
@@ -278,12 +328,14 @@ function switchShift(shift) {
   renderMain();
 }
 
-function toggleTask(taskId) {
+function toggleTask(taskId, event) {
   const today = new Date().toDateString();
   const shift = state.currentShift;
   const tasks = state.tasks[shift] || [];
   const prevDone = state.completions.filter(c => c.shift === shift && c.date === today).length;
   const existing = state.completions.findIndex(c => c.taskId===taskId && c.shift===shift && c.date===today);
+  const isChecking = existing < 0;
+
   if (existing >= 0) {
     state.completions.splice(existing, 1);
   } else {
@@ -291,16 +343,53 @@ function toggleTask(taskId) {
       taskId,
       shift,
       date: today,
-      manager: state.currentManager.name,
+      manager: (state.currentManager || state.managers[0] || { name: '—' }).name,
       time: fmtTimeNow(),
       timestamp: Date.now()
     });
   }
+
+  if (event) spawnRipple(event.clientX, event.clientY, isChecking);
+
+  justToggledId = isChecking ? taskId : null;
   save();
   renderMain();
+  setTimeout(() => { justToggledId = null; }, 500);
+
   const newDone = state.completions.filter(c => c.shift === shift && c.date === today).length;
   if (newDone === tasks.length && prevDone !== tasks.length) {
+    if (event) setTimeout(() => spawnConfetti(event.clientX, event.clientY), 80);
     showCompletionSignatureModal();
+  }
+}
+
+function spawnRipple(x, y, isCheck) {
+  const el = document.createElement('div');
+  el.className = 'task-ripple' + (isCheck ? ' task-ripple-check' : '');
+  el.style.left = x + 'px';
+  el.style.top  = y + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 600);
+}
+
+function spawnConfetti(x, y) {
+  const colors = ['#FF6B00','#FFD000','#FF4466','#44BB77','#4499FF','#FF88CC','#AA66FF'];
+  for (let i = 0; i < 10; i++) {
+    const dot = document.createElement('div');
+    dot.className = 'confetti-dot';
+    const angle = (i / 18) * 360 + Math.random() * 18;
+    const dist  = 55 + Math.random() * 60;
+    dot.style.cssText = `
+      left:${x}px; top:${y}px;
+      background:${colors[i % colors.length]};
+      --dx:${Math.cos(angle * Math.PI / 180) * dist}px;
+      --dy:${Math.sin(angle * Math.PI / 180) * dist}px;
+      --dur:${0.55 + Math.random() * 0.25}s;
+      width:${5 + Math.random() * 5}px;
+      height:${5 + Math.random() * 5}px;
+    `;
+    document.body.appendChild(dot);
+    setTimeout(() => dot.remove(), 900);
   }
 }
 
@@ -439,57 +528,6 @@ function renderAdmin() {
 
   let html = `
     <div class="admin-section">
-      <div class="admin-section-header">Shift Settings</div>
-      <div class="admin-row">
-        <div><div class="admin-row-label">Morning shift</div><div class="admin-row-sub">Manual selection only</div></div>
-      </div>
-      <div class="admin-row">
-        <div><div class="admin-row-label">Night shift</div><div class="admin-row-sub">Manual selection only</div></div>
-      </div>
-      <div class="admin-row">
-        <button onclick="resetSetup()" style="color: var(--danger); background: none; border: none; font-family: inherit; font-size: 14px; cursor: pointer; padding: 0;">Reset tablet setup</button>
-      </div>
-    </div>
-
-    <div class="admin-section">
-      <div class="admin-section-header">Managers</div>
-      ${state.managers.map(m => `
-        <div class="admin-row">
-          <div class="admin-row-label">${m.name}</div>
-          <div class="admin-row-sub">${m.role}</div>
-        </div>
-      `).join('')}
-    </div>
-
-    <div class="admin-section">
-      <div class="admin-section-header">Morning Tasks <button class="add-btn" onclick="showAddTaskForm('morning')">+ Add</button></div>
-      ${state.tasks.morning.map(t => `
-        <div class="admin-row">
-          <div><div class="admin-row-label">${t.name}</div><div class="admin-row-sub">${t.section}</div></div>
-          <button class="admin-delete" onclick="deleteTask('morning','${t.id}')">✕</button>
-        </div>
-      `).join('')}
-      <div class="add-form hidden" id="add-form-morning">
-        <input placeholder="Task name" id="new-task-morning" onkeydown="if(event.key==='Enter')addTask('morning')">
-        <button onclick="addTask('morning')">Add</button>
-      </div>
-    </div>
-
-    <div class="admin-section">
-      <div class="admin-section-header">Night Tasks <button class="add-btn" onclick="showAddTaskForm('night')">+ Add</button></div>
-      ${state.tasks.night.map(t => `
-        <div class="admin-row">
-          <div><div class="admin-row-label">${t.name}</div><div class="admin-row-sub">${t.section}</div></div>
-          <button class="admin-delete" onclick="deleteTask('night','${t.id}')">✕</button>
-        </div>
-      `).join('')}
-      <div class="add-form hidden" id="add-form-night">
-        <input placeholder="Task name" id="new-task-night" onkeydown="if(event.key==='Enter')addTask('night')">
-        <button onclick="addTask('night')">Add</button>
-      </div>
-    </div>
-
-    <div class="admin-section">
       <div class="admin-section-header">Shift Logs</div>
       <div class="admin-row">
         <label class="admin-row-label" for="log-date-filter">Filter date</label>
@@ -497,31 +535,16 @@ function renderAdmin() {
       </div>
       ${renderLogSection(filteredLogs)}
     </div>
+
+    <div class="admin-section">
+      <div class="admin-section-header">Danger Zone</div>
+      <div class="admin-row">
+        <button onclick="resetSetup()" style="color:var(--danger);background:none;border:none;font-family:inherit;font-size:14px;cursor:pointer;padding:0;font-weight:500;">Reset all data</button>
+      </div>
+    </div>
   `;
 
   document.getElementById('admin-body').innerHTML = html;
-}
-
-function showAddTaskForm(shift) {
-  const form = document.getElementById(`add-form-${shift}`);
-  if (form) form.classList.remove('hidden');
-}
-
-function addTask(shift) {
-  const input = document.getElementById(`new-task-${shift}`);
-  const name = input.value.trim();
-  if (!name) return;
-  const section = shift === 'morning' ? 'Cleaning' : 'Closing';
-  state.tasks[shift].push({ id: `t_${Date.now()}`, name, section });
-  input.value = '';
-  save();
-  renderAdmin();
-}
-
-function deleteTask(shift, id) {
-  state.tasks[shift] = state.tasks[shift].filter(t => t.id !== id);
-  save();
-  renderAdmin();
 }
 
 function deleteManager(id) {
@@ -566,16 +589,11 @@ function resetAtMidnight() {
   if (lastMidnightReset === today) return;
   lastMidnightReset = today;
 
-  localStorage.removeItem('dd_state');
-  state = {
-    config: null,
-    managers: [],
-    currentManager: null,
-    currentShift: 'morning',
-    tasks: { morning: [], night: [] },
-    completions: [],
-  };
+  state.completions = [];
+  state.currentManager = null;
+  state.completionSigner = null;
   selectedShift = null;
+  save();
   ensureDefaults();
   goCheckin();
 }

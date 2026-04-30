@@ -13,11 +13,12 @@
      CHECK-IN SCREEN
 ══════════════════════════════════════════ -->
 <div id="checkin-screen" class="screen">
+  <button class="checkin-theme-btn" onclick="toggleTheme(event)" id="theme-btn-checkin" title="Toggle theme">🌙</button>
   <div class="checkin-card">
     <div class="checkin-shift-badge" id="checkin-shift-label">Select Shift</div>
-    <div class="checkin-title">Morning or Night?</div>
-    <div class="checkin-sub" id="checkin-time-range">Choose the shift you're starting.</div>
-    <div class="manager-list" id="manager-list"></div>
+    <div class="checkin-title">Good to see you!</div>
+    <div class="checkin-sub" id="checkin-time-range">Which shift are you starting?</div>
+    <div id="manager-list"></div>
     <button class="checkin-confirm" id="checkin-confirm-btn" onclick="confirmCheckin()">Start Shift →</button>
   </div>
 </div>
@@ -29,11 +30,13 @@
   <div class="app-header">
     <div class="header-top">
       <div>
-        <div class="header-logo">DD Manager</div>
+        <div class="header-logo">Dunkin' Donuts</div>
+        <div class="header-title">Shift Task Board</div>
       </div>
       <div class="header-right">
         <div class="header-time" id="live-clock">--:-- --</div>
         <div class="manager-chip" id="header-manager">—</div>
+        <button class="header-btn" onclick="toggleTheme(event)" id="theme-btn-main" title="Toggle theme">🌙</button>
         <button class="settings-btn" onclick="showAdmin()">⚙</button>
       </div>
     </div>
@@ -61,6 +64,7 @@
   <div class="admin-header">
     <button class="admin-back" onclick="showMain()">←</button>
     <div class="admin-title">Settings & Logs</div>
+    <button class="admin-theme-btn" onclick="toggleTheme(event)" id="theme-btn-admin" title="Toggle theme">🌙</button>
   </div>
   <div class="admin-body" id="admin-body"></div>
 </div>
